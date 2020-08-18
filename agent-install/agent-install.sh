@@ -460,7 +460,11 @@ function create_config() {
 				-e "s~^HZN_DEVICE_ID=[^ ]*~HZN_DEVICE_ID=${DEVICE_ID}~g" \
 				-e "s~^HZN_FSS_CSSURL=[^ ]*~HZN_FSS_CSSURL=${HZN_FSS_CSSURL}~g" /etc/default/horizon
 		else
-			if [[ ${CERTIFICATE:0:1} != "/" ]]; then
+			if [[ ${CERTIFICATE:0:1} != "/" ]]; then 
+				if [[ ! -d /etc/horizon ]]; then
+					log_info "/etc/horizon does not exist. Creating it..."
+					mkdir -p /etc/horizon
+				fi
                 set -x
 				sudo cp $CERTIFICATE /etc/horizon/agent-install.crt
                 { set +x; } 2>/dev/null
@@ -496,6 +500,10 @@ function install_macos() {
     { set +x; } 2>/dev/null
 	if [[ "$CERTIFICATE" != "" ]]; then
 		log_info "Configuring an edge node to trust the ICP certificate ..."
+		if [[ ! -d /private/etc/horizon ]]; then
+			log_info "/private/etc/horizon does not exist. Creating it..."
+			mkdir -p /private/etc/horizon
+		fi
 		set -x
 		sudo cp $CERTIFICATE /private/etc/horizon/agent-install.crt
 		CERTIFICATE=/private/etc/horizon/agent-install.crt
@@ -597,6 +605,10 @@ function install_macos() {
 	else
 		if [[ ${CERTIFICATE:0:1} != "/" ]]; then
 			#ABS_CERTIFICATE=$(pwd)/${CERTIFICATE}
+			if [[ ! -d /private/etc/horizon ]]; then
+				log_info "/private/etc/horizon does not exist. Creating it..."
+				mkdir -p /private/etc/horizon
+			fi
 			sudo cp $CERTIFICATE /private/etc/horizon/agent-install.crt
 			ABS_CERTIFICATE=/private/etc/horizon/agent-install.crt
 		else
