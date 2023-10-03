@@ -59,7 +59,8 @@ Parameters:
     -x <days>   Sets the expiration field of the versioned files pushed to CSS. Should not be used unless artifacts are being produced and pushed by a CI/CD pipeline. Default is expiration not set.
 
 Required Environment Variables:
-    CLUSTER_URL: for example: https://<cluster_CA_domain>:<port-number>
+    HZN_EXCHANGE_URL - external URL to reach the exchange
+    HZN_EXCHANGE_USER_AUTH - needs to be set to the Exchange root credentials to load files into the CSS in the IBM org
 
 Optional Environment Variables:
     PACKAGE_NAME: The base name of the horizon content tar file (can include a path). Default: $PACKAGE_NAME
@@ -155,7 +156,7 @@ fi
 function checkPrereqsAndInput () {
     echo "Checking system requirements..."
     if ! command -v oc >/dev/null 2>&1; then
-        fatal 2 "oc is not installed."
+        echo "oc is not installed."
     fi
     echo " - oc installed"
 
@@ -164,7 +165,7 @@ function checkPrereqsAndInput () {
     fi
     echo " - hzn installed"
 
-    if [[ $EDGE_NODE_TYPE == 'x86_64-Cluster' || $EDGE_NODE_TYPE == 'ppc64le-Cluster' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'x86_64-Cluster'* || $EDGE_NODE_TYPE == *'ppc64le-Cluster'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         if ! command -v docker >/dev/null 2>&1; then
             fatal 2 "docker is not installed."
         fi
@@ -173,9 +174,10 @@ function checkPrereqsAndInput () {
     echo ""
 
     echo "Checking command arguments ..."
-    if [[ $SUPPORTED_NODE_TYPES != *$EDGE_NODE_TYPE* ]]; then
-        fatal 1 "Unknown edge node type. Valid values: $SUPPORTED_NODE_TYPES"
-    fi
+    # if [[ $SUPPORTED_NODE_TYPES != *$EDGE_NODE_TYPE* ]]; then
+    # if [[ "$EDGE_NODE_TYPE" =~ ^(ARM32-Deb|ARM64-Deb|AMD64-Deb|x86_64-RPM|arm64-macOS|x86_64-macOS|x86_64-Cluster|ppc64le-RPM|ppc64le-Cluster|s390x-RPM|s390x-Deb|ALL)$ ]]; then
+    #     fatal 1 "Unknown edge node type. Valid values: $SUPPORTED_NODE_TYPES"
+    # fi
     if [[ -n $DIR && ! -d $DIR ]]; then
         fatal 1 "the value of option '-f' isn't an existing directory ..."
     fi
@@ -190,12 +192,24 @@ function checkPrereqsAndInput () {
     echo ""
 
     echo "Checking environment variables..."
-    if [[ -z $CLUSTER_URL ]]; then
-        fatal 1 "CLUSTER_URL environment variable is not set.'"
+    if [[ -z $CLUSTER_URL && -z $HZN_EXCHANGE_URL ]]; then
+        fatal 1 "CLUSTER_URL and HZN_EXCHANGE_URL environment variable not set. One or the other is required"
     fi
+    if [[ -z $HZN_EXCHANGE_USER_AUTH ]]; then
+        fatal 1 "HZN_EXCHANGE_USER_AUTH not set. Set to the root credentials to continue."
+    fi
+
     echo " - CLUSTER_URL: $CLUSTER_URL"
+    echo " - HZN_EXCHANGE_URL: $HZN_EXCHANGE_URL"
     echo ""
 }
+
+# allow management hub urls to be overwritten
+export HZN_EXCHANGE_URL=${HZN_EXCHANGE_URL:-"$CLUSTER_URL/edge-exchange/v1"}
+export HZN_FSS_CSSURL=${HZN_FSS_CSSURL:-"$CLUSTER_URL/edge-css/"}
+export HZN_AGBOT_URL=${HZN_AGBOT_URL:-"$CLUSTER_URL/edge-agbot/"}
+export HZN_SDO_SVC_URL=${HZN_SDO_SVC_URL:-"$CLUSTER_URL/edge-sdo-ocs/api"}
+export HZN_FDO_SVC_URL=${HZN_FDO_SVC_URL:-"$CLUSTER_URL/edge-fdo-ocs/api"}
 
 # Method to store the software package version if it is not set yet
 function setSoftwarePackageVersion() { 
@@ -328,11 +342,12 @@ function getAutoUpgradeCronjobK8sImageTarFile() {
 # Put 1 file into CSS in the IBM org as a public object.
 function putOneFileInCss() {
     local filename=${1:?} objectType=$2 addExpiration=$3 version=$4
-    local resourcename=$(oc get eamhub --no-headers |awk '{printf $1}')
+    local resourcename
 
     # First get exchange root creds, if necessary
     if [[ -z $HZN_EXCHANGE_USER_AUTH ]]; then
         echo "Getting exchange root credentials to use to publish to CSS..."
+        resourcename=$(oc get eamhub --no-headers |awk '{printf $1}')
         export HZN_EXCHANGE_USER_AUTH="root/root:$(oc get secret $resourcename-auth -o jsonpath="{.data.exchange-root-pass}" | base64 --decode)"
         chk $? 'getting exchange root creds'
     fi
@@ -437,11 +452,12 @@ function getAgentFileTotal() {
 function test_IsFileInCss() {
 	local org=$1 objectType=$2 objectID=$3 
 
-	local resourcename=$(oc get eamhub --no-headers |awk '{printf $1}')
+	local resourcename
 	local USER_AUTH=${HZN_EXCHANGE_USER_AUTH}
 
         # First get exchange root creds, if necessary
         if [[ -z ${USER_AUTH} ]]; then 
+        resourcename=$(oc get eamhub --no-headers |awk '{printf $1}')
 		USER_AUTH="root/root:$(oc get secret $resourcename-auth -o jsonpath="{.data.exchange-root-pass}" | base64 --decode)" 
 		chk $? 'getting exchange root creds'
         fi
@@ -575,11 +591,11 @@ function createAgentInstallConfig () {
 	    if [[ $EDGE_NODE_TYPE == 'x86_64-Cluster' || $EDGE_NODE_TYPE == 'ppc64le-Cluster' || $EDGE_NODE_TYPE == 'ALL' ]]; then   # if they chose ALL, the cluster agent-install.cfg is a superset 
 
 		    cat << EndOfContent > agent-install.cfg 
-HZN_EXCHANGE_URL=$CLUSTER_URL/edge-exchange/v1
-HZN_FSS_CSSURL=$CLUSTER_URL/edge-css/
-HZN_AGBOT_URL=$CLUSTER_URL/edge-agbot/
-HZN_SDO_SVC_URL=$CLUSTER_URL/edge-sdo-ocs/api
-HZN_FDO_SVC_URL=$CLUSTER_URL/edge-fdo-ocs/api
+HZN_EXCHANGE_URL=$HZN_EXCHANGE_URL
+HZN_FSS_CSSURL=$HZN_FSS_CSSURL
+HZN_AGBOT_URL=$HZN_AGBOT_URL
+HZN_SDO_SVC_URL=$HZN_SDO_SVC_URL
+HZN_FDO_SVC_URL=$HZN_FDO_SVC_URL
 AGENT_NAMESPACE=$AGENT_NAMESPACE
 EndOfContent
 
@@ -594,11 +610,11 @@ EndOfContent
 		else   # device 
 
 			cat << EndOfContent > agent-install.cfg
-HZN_EXCHANGE_URL=$CLUSTER_URL/edge-exchange/v1
-HZN_FSS_CSSURL=$CLUSTER_URL/edge-css/
-HZN_AGBOT_URL=$CLUSTER_URL/edge-agbot/
-HZN_SDO_SVC_URL=$CLUSTER_URL/edge-sdo-ocs/api
-HZN_FDO_SVC_URL=$CLUSTER_URL/edge-fdo-ocs/api
+HZN_EXCHANGE_URL=$HZN_EXCHANGE_URL
+HZN_FSS_CSSURL=$HZN_FSS_CSSURL
+HZN_AGBOT_URL=$HZN_AGBOT_URL
+HZN_SDO_SVC_URL=$HZN_SDO_SVC_URL
+HZN_FDO_SVC_URL=$HZN_FDO_SVC_URL
 EndOfContent
 
         		if [[ -n $ORG_ID ]]; then
@@ -627,39 +643,39 @@ EndOfContent
 }
 
 # Get the management hub self-signed certificate
-function getClusterCert () {
+# function getClusterCert () {
 
-    local upgradeFiles=$1
+#     local upgradeFiles=$1
 
-    echo "Getting the management hub self-signed certificate agent-install.crt..."
-    oc get secret management-ingress-ibmcloud-cluster-ca-cert -o jsonpath="{.data['ca\.crt']}" | base64 --decode > agent-install.crt
-    chk $? 'getting the management hub self-signed certificate'
+#     echo "Getting the management hub self-signed certificate agent-install.crt..."
+#     oc get secret management-ingress-ibmcloud-cluster-ca-cert -o jsonpath="{.data['ca\.crt']}" | base64 --decode > agent-install.crt
+#     chk $? 'getting the management hub self-signed certificate'
 
-    local doUploadCert='true'
-    local doUploadCert_versioned='true' 
-    # Only upload cert if it doesn't exist in CSS.. ie. fresh install
-    if [[ $PUT_FILES_IN_CSS == 'true' ]]; then
-        if test_IsFileInCss "IBM"  "agent_files" "agent-install.crt"; then 
-            doUploadCert='false' 
-        fi
+#     local doUploadCert='true'
+#     local doUploadCert_versioned='true' 
+#     # Only upload cert if it doesn't exist in CSS.. ie. fresh install
+#     if [[ $PUT_FILES_IN_CSS == 'true' ]]; then
+#         if test_IsFileInCss "IBM"  "agent_files" "agent-install.crt"; then 
+#             doUploadCert='false' 
+#         fi
 
-        if  test_IsFileInCss "IBM"  "agent_cert_files-1.0.0" "agent-install.crt"; then
-            doUploadCert_versioned='false'
-        fi
-    fi
+#         if  test_IsFileInCss "IBM"  "agent_cert_files-1.0.0" "agent-install.crt"; then
+#             doUploadCert_versioned='false'
+#         fi
+#     fi
 
-    if [[ $PUT_FILES_IN_CSS == 'true' ]]; then
-        if [[ ${doUploadCert} == 'true' ]]; then 
-            putOneFileInCss agent-install.crt agent_files false
-        fi
+#     if [[ $PUT_FILES_IN_CSS == 'true' ]]; then
+#         if [[ ${doUploadCert} == 'true' ]]; then 
+#             putOneFileInCss agent-install.crt agent_files false
+#         fi
 
-        if [[ ${doUploadCert_versioned} == 'true' ]]; then 
-            putOneFileInCss agent-install.crt  "agent_cert_files-1.0.0" false  "1.0.0"
-            addElementToArray $upgradeFiles  "agent-install.crt"
-        fi
-    fi
-    echo ""
-}
+#         if [[ ${doUploadCert_versioned} == 'true' ]]; then 
+#             putOneFileInCss agent-install.crt  "agent_cert_files-1.0.0" false  "1.0.0"
+#             addElementToArray $upgradeFiles  "agent-install.crt"
+#         fi
+#     fi
+#     echo ""
+# }
 
 # Create 1 horizon pkg tar file, put it into CSS, and then remove the tar file
 function putHorizonPkgsInCss() {
@@ -789,31 +805,31 @@ function gatherHorizonPackageFiles() {
     local agentSoftwareFiles=$1
 
     local opsys pkgtype arch
-    if [[ $EDGE_NODE_TYPE == 'ARM32-Deb' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'ARM32-Deb'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         getHorizonPackageFiles $agentSoftwareFiles 'linux' 'deb' 'armhf'
     fi
-    if [[ $EDGE_NODE_TYPE == 'ARM64-Deb' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'ARM64-Deb'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         getHorizonPackageFiles $agentSoftwareFiles 'linux' 'deb' 'arm64'
     fi
-    if [[ $EDGE_NODE_TYPE == 'AMD64-Deb' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'AMD64-Deb'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         getHorizonPackageFiles $agentSoftwareFiles 'linux' 'deb' 'amd64'
     fi
-    if [[ $EDGE_NODE_TYPE == 'x86_64-RPM' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'x86_64-RPM'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         getHorizonPackageFiles $agentSoftwareFiles 'linux' 'rpm' 'x86_64'
     fi
-    if [[ $EDGE_NODE_TYPE == 'x86_64-macOS' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'x86_64-macOS'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         getHorizonPackageFiles $agentSoftwareFiles 'macos' 'pkg' 'x86_64'
     fi
-    if [[ $EDGE_NODE_TYPE == 'arm64-macOS' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'arm64-macOS'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         getHorizonPackageFiles $agentSoftwareFiles 'macos' 'pkg' 'arm64'
     fi
-    if [[ $EDGE_NODE_TYPE == 'ppc64le-RPM' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'ppc64le-RPM'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         getHorizonPackageFiles $agentSoftwareFiles 'linux' 'rpm' 'ppc64le'
     fi
-    if [[ $EDGE_NODE_TYPE == 's390x-RPM' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'s390x-RPM'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         getHorizonPackageFiles $agentSoftwareFiles 'linux' 'rpm' 's390x'
     fi
-    if [[ $EDGE_NODE_TYPE == 's390x-Deb' || $EDGE_NODE_TYPE == 'ALL' ]]; then
+    if [[ $EDGE_NODE_TYPE == *'s390x-Deb'* || $EDGE_NODE_TYPE == 'ALL' ]]; then
         getHorizonPackageFiles $agentSoftwareFiles 'linux' 'deb' 's390x'
     fi
     # there are no packages to extract for edge-cluster, because that uses the agent docker image
@@ -948,12 +964,12 @@ all_main() {
 	    manifestAddTypeStanza mymainresult "${mymainresult}" "configurationUpgrade" "1.0.0" "${upgradeConfigFiles[@]}"
     fi
 
-    local upgradeCertFiles=()    
-    getClusterCert upgradeCertFiles
-    certFileLength=${#upgradeCertFiles[@]}
-    if [[ $certFileLength -gt 0 ]]; then 
-	    manifestAddTypeStanza mymainresult "${mymainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
-    fi
+    # local upgradeCertFiles=()    
+    # getClusterCert upgradeCertFiles
+    # certFileLength=${#upgradeCertFiles[@]}
+    # if [[ $certFileLength -gt 0 ]]; then 
+	#     manifestAddTypeStanza mymainresult "${mymainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
+    # fi
 
     gatherHorizonPackageFiles upgradeSoftwareFiles
 
@@ -1003,12 +1019,12 @@ cluster_main() {
 	    manifestAddTypeStanza myclustermainresult "${myclustermainresult}" "configurationUpgrade" "1.0.0" "${upgradeConfigFiles[@]}"
     fi
 
-    local upgradeCertFiles=()    
-    getClusterCert upgradeCertFiles
-    certFileLength=${#upgradeCertFiles[@]}
-    if [[ $certFileLength -gt 0 ]]; then 
-	    manifestAddTypeStanza myclustermainresult "${myclustermainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
-    fi
+    # local upgradeCertFiles=()    
+    # getClusterCert upgradeCertFiles
+    # certFileLength=${#upgradeCertFiles[@]}
+    # if [[ $certFileLength -gt 0 ]]; then 
+	#     manifestAddTypeStanza myclustermainresult "${myclustermainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
+    # fi
 
     getEdgeClusterFiles upgradeSoftwareFiles
 
@@ -1051,12 +1067,12 @@ device_main() {
 	    manifestAddTypeStanza mydevicemainresult "${mydevicemainresult}" "configurationUpgrade" "1.0.0" "${upgradeConfigFiles[@]}"
     fi
 
-    local upgradeCertFiles=()    
-    getClusterCert upgradeCertFiles
-    certFileLength=${#upgradeCertFiles[@]}
-    if [[ $certFileLength -gt 0 ]]; then 
-	    manifestAddTypeStanza mydevicemainresult "${mydevicemainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
-    fi
+    # local upgradeCertFiles=()    
+    # getClusterCert upgradeCertFiles
+    # certFileLength=${#upgradeCertFiles[@]}
+    # if [[ $certFileLength -gt 0 ]]; then 
+	#     manifestAddTypeStanza mydevicemainresult "${mydevicemainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
+    # fi
 
     local upgradeSoftwareFiles=()    # define this here since we need to capture device and cluster filenames and agent-install.sh
     gatherHorizonPackageFiles upgradeSoftwareFiles
@@ -1101,13 +1117,16 @@ main() {
     # Manifest for upgrade policy
     upgradeManifest="{}"
 
-    if [[ $EDGE_NODE_TYPE == 'ALL' ]]; then
-	    all_main upgradeManifest "${upgradeManifest}"
-    elif [[ $EDGE_NODE_TYPE == 'x86_64-Cluster' || $EDGE_NODE_TYPE == 'ppc64le-Cluster' ]]; then
-	    cluster_main upgradeManifest "${upgradeManifest}"
-    else
-	    device_main upgradeManifest "${upgradeManifest}"
-    fi
+    # send to ALL main to get both cluster and device files when sendin in list
+    all_main upgradeManifest "${upgradeManifest}"
+
+    # if [[ $EDGE_NODE_TYPE == 'ALL' ]]; then
+	#     all_main upgradeManifest "${upgradeManifest}"
+    # elif [[ $EDGE_NODE_TYPE == 'x86_64-Cluster' || $EDGE_NODE_TYPE == 'ppc64le-Cluster' ]]; then
+	#     cluster_main upgradeManifest "${upgradeManifest}"
+    # else
+	#     device_main upgradeManifest "${upgradeManifest}"
+    # fi
 
     # Publish manifest if artifacts were pushed to CSS which populated the upgradeManifest variable
     if [[ ! "${upgradeManifest}" == "{}" ]]; then
