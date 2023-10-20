@@ -39,7 +39,7 @@ AGENT_NAMESPACE=${AGENT_NAMESPACE:-openhorizon-agent}
 function scriptUsage() {
     cat << EOF
 
-Usage: ./edgeNodeFiles.sh <edge-node-type> [-o <hzn-org-id>] [-c] [-f <directory>] [-t] [-p <package_name>] [-s <edge-cluster-storage-class>] [-i <agent-image-tag>] [-m <agent-namespace>] [-r <registry/repo-path>] [-g <tag>] [-b] [-x <days>]
+Usage: ./edgeNodeFiles.sh <edge-node-type> [-o <hzn-org-id>] [-c] [-f <directory>] [-t] [-p <package_name>] [-s <edge-cluster-storage-class>] [-i <agent-image-tag>] [-m <agent-namespace>] [-r <registry/repo-path>] [-g <tag>] [-b] [-x <days>] [-n <environment>] [-e <namespace>]
 
 Parameters:
   Required:
@@ -57,6 +57,8 @@ Parameters:
     -g <tag>    Overwrite the default agent image tag. Default is $AGENT_IMAGE_TAG.
     -b          Get the agent images from the horizon content tar file.
     -x <days>   Sets the expiration field of the versioned files pushed to CSS. Should not be used unless artifacts are being produced and pushed by a CI/CD pipeline. Default is expiration not set.
+    -n <environment>    Either "AIO" or "ocp-<cluster-name>". This will determine if agent-install.crt is loaded to the CSS. AIO will not load the cert.
+    -e <namespace>      Namespace where agent-install.crt certificate is saved.
 
 Required Environment Variables:
     HZN_EXCHANGE_URL - external URL to reach the exchange
@@ -137,6 +139,12 @@ while (( "$#" )); do
             shift
             ;;
         -x) AGENT_FILES_EXPIRATION=$2
+            shift 2
+            ;;
+        -n) INSTALL_ENV=$2
+            shift 2
+            ;;
+        -e) NAMESPACE=$2
             shift 2
             ;;
         -*) #invalid flag
@@ -643,39 +651,39 @@ EndOfContent
 }
 
 # Get the management hub self-signed certificate
-# function getClusterCert () {
+function getClusterCert () {
 
-#     local upgradeFiles=$1
+    local upgradeFiles=$1
 
-#     echo "Getting the management hub self-signed certificate agent-install.crt..."
-#     oc get secret management-ingress-ibmcloud-cluster-ca-cert -o jsonpath="{.data['ca\.crt']}" | base64 --decode > agent-install.crt
-#     chk $? 'getting the management hub self-signed certificate'
+    echo "Getting the management hub self-signed certificate agent-install.crt..."
+    oc get secret ingress-tls-secret -n "${NAMESPACE}" -o jsonpath="{.data['tls\.crt']}" | base64 --decode > agent-install.crt
+    chk $? 'getting the management hub self-signed certificate'
 
-#     local doUploadCert='true'
-#     local doUploadCert_versioned='true' 
-#     # Only upload cert if it doesn't exist in CSS.. ie. fresh install
-#     if [[ $PUT_FILES_IN_CSS == 'true' ]]; then
-#         if test_IsFileInCss "IBM"  "agent_files" "agent-install.crt"; then 
-#             doUploadCert='false' 
-#         fi
+    local doUploadCert='true'
+    local doUploadCert_versioned='true' 
+    # Only upload cert if it doesn't exist in CSS.. ie. fresh install
+    if [[ $PUT_FILES_IN_CSS == 'true' ]]; then
+        if test_IsFileInCss "IBM"  "agent_files" "agent-install.crt"; then 
+            doUploadCert='false' 
+        fi
 
-#         if  test_IsFileInCss "IBM"  "agent_cert_files-1.0.0" "agent-install.crt"; then
-#             doUploadCert_versioned='false'
-#         fi
-#     fi
+        if  test_IsFileInCss "IBM"  "agent_cert_files-1.0.0" "agent-install.crt"; then
+            doUploadCert_versioned='false'
+        fi
+    fi
 
-#     if [[ $PUT_FILES_IN_CSS == 'true' ]]; then
-#         if [[ ${doUploadCert} == 'true' ]]; then 
-#             putOneFileInCss agent-install.crt agent_files false
-#         fi
+    if [[ $PUT_FILES_IN_CSS == 'true' ]]; then
+        if [[ ${doUploadCert} == 'true' ]]; then 
+            putOneFileInCss agent-install.crt agent_files false
+        fi
 
-#         if [[ ${doUploadCert_versioned} == 'true' ]]; then 
-#             putOneFileInCss agent-install.crt  "agent_cert_files-1.0.0" false  "1.0.0"
-#             addElementToArray $upgradeFiles  "agent-install.crt"
-#         fi
-#     fi
-#     echo ""
-# }
+        if [[ ${doUploadCert_versioned} == 'true' ]]; then 
+            putOneFileInCss agent-install.crt  "agent_cert_files-1.0.0" false  "1.0.0"
+            addElementToArray $upgradeFiles  "agent-install.crt"
+        fi
+    fi
+    echo ""
+}
 
 # Create 1 horizon pkg tar file, put it into CSS, and then remove the tar file
 function putHorizonPkgsInCss() {
@@ -964,12 +972,14 @@ all_main() {
 	    manifestAddTypeStanza mymainresult "${mymainresult}" "configurationUpgrade" "1.0.0" "${upgradeConfigFiles[@]}"
     fi
 
-    # local upgradeCertFiles=()    
-    # getClusterCert upgradeCertFiles
-    # certFileLength=${#upgradeCertFiles[@]}
-    # if [[ $certFileLength -gt 0 ]]; then 
-	#     manifestAddTypeStanza mymainresult "${mymainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
-    # fi
+    if [[ -n ${INSTALL_ENV} && ${INSTALL_ENV} != "AIO" ]]; then
+        local upgradeCertFiles=()    
+        getClusterCert upgradeCertFiles
+        certFileLength=${#upgradeCertFiles[@]}
+        if [[ $certFileLength -gt 0 ]]; then 
+            manifestAddTypeStanza mymainresult "${mymainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
+        fi
+    fi
 
     gatherHorizonPackageFiles upgradeSoftwareFiles
 
