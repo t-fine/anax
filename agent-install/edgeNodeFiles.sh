@@ -27,9 +27,6 @@ MANIFEST_NAME='edgeNodeFiles_manifest'
 # Global variables
 ALREADY_LOGGED_INTO_REGISTRY='false'
 AGENT_FILES_EXPIRATION=''   # in days
-SOFTWARE_PACKAGE_VERSION='0'
-
-
 
 # Environment variables and their defaults
 PACKAGE_NAME=${PACKAGE_NAME:-horizon-edge-packages-4.4.0}
@@ -221,10 +218,11 @@ export HZN_FDO_SVC_URL=${HZN_FDO_SVC_URL:-"$CLUSTER_URL/edge-fdo-ocs/api"}
 
 # Method to store the software package version if it is not set yet
 function setSoftwarePackageVersion() { 
-
-       if [[ ! $1 == '' ]] && [[ "${SOFTWARE_PACKAGE_VERSION}" == "0" ]]; then
-	       SOFTWARE_PACKAGE_VERSION=$1
-       fi
+    if [[ ! $1 == '' ]]; then
+        SOFTWARE_PACKAGE_VERSION=$1
+    else
+        SOFTWARE_PACKAGE_VERSION=$(getHznVersion)
+    fi
 }
 
 # Utility method to add an element to an array
@@ -377,10 +375,27 @@ function putOneFileInCss() {
         fi
     fi
 
-    echo "${META_DATA}" | hzn mms -o IBM object publish -f $filename   -m-
+    local exit=0
+    local count=0
+    until [[ ${count} -gt 3 ]]; do
+        echo "${META_DATA}" | hzn mms -o IBM object publish -f $filename   -m-
+        exit=$?
+        wait=$((2 ** count))
+        count=$((count + 1))
+        if [[ ${exit} == 0 ]]; then
+            echo "Successfully published $filename"
+            echo ""
+            break
+        elif [[ ${count} -gt 3 ]]; then
+            echo "No more retries left... exiting"
+        else
+            echo "Error publishing $filename in CSS as a public object"
+            echo "Retry ${count}/${retries} exited ${exit}, retrying in ${wait} seconds..."
+            sleep "${wait}"
+        fi
+    done
 
-    local rc=$?
-    chk $rc "publishing $filename in CSS as a public object. Ensure HZN_EXCHANGE_USER_AUTH is set to credentials that can publish to the IBM org."
+    chk $exit "publishing $filename in CSS as a public object. Ensure HZN_EXCHANGE_USER_AUTH is set to credentials that can publish to the IBM org."
 }
 
 # it returns the agent file expiration time beased on $AGENT_FILES_EXPIRATION.
@@ -809,7 +824,6 @@ function getHorizonPackageFiles() {
 
 # Get all of the the horizon packages that they specified
 function gatherHorizonPackageFiles() {
-
     local agentSoftwareFiles=$1
 
     local opsys pkgtype arch
@@ -1004,107 +1018,6 @@ all_main() {
     eval $__resultvar="'$mymainresult'"
 }
 
-cluster_main() {
-
-    local __resultvar=$1
-    upgradeManifest=$2
-
-    local myclustermainresult=$upgradeManifest
-    checkPrereqsAndInput
-
-    if [[ -n $DIR ]]; then pushd $DIR; fi   # if they want the files somewhere else, make that our current dir
-
-    cleanUpPreviousFiles
-
-    local upgradeSoftwareFiles=()    # define this here since we need to capture device and cluster filenames and agent-install.sh
-
-    getAgentK8sImageTarFile upgradeSoftwareFiles
-    getAutoUpgradeCronjobK8sImageTarFile upgradeSoftwareFiles
-
-    local upgradeConfigFiles=()    
-    createAgentInstallConfig upgradeConfigFiles
-
-    configFileLength=${#upgradeConfigFiles[@]}
-    if [[ $configFileLength -gt 0 ]]; then 
-	    manifestAddTypeStanza myclustermainresult "${myclustermainresult}" "configurationUpgrade" "1.0.0" "${upgradeConfigFiles[@]}"
-    fi
-
-    # local upgradeCertFiles=()    
-    # getClusterCert upgradeCertFiles
-    # certFileLength=${#upgradeCertFiles[@]}
-    # if [[ $certFileLength -gt 0 ]]; then 
-	#     manifestAddTypeStanza myclustermainresult "${myclustermainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
-    # fi
-
-    getEdgeClusterFiles upgradeSoftwareFiles
-
-    getAgentInstallScript upgradeSoftwareFiles
-    softwareFileLength=${#upgradeSoftwareFiles[@]}
-    if [[ $softwareFileLength -gt 0 ]]; then 
-	    manifestAddTypeStanza myclustermainresult "${myclustermainresult}" "softwareUpgrade" "${SOFTWARE_PACKAGE_VERSION}" "${upgradeSoftwareFiles[@]}"
-    fi
-
-    echo
-
-    # Note: if they specified they wanted files in CSS, we did that as the files were created
-
-    if [[ $CREATE_TAR_FILE == 'true' ]]; then
-        createTarFile
-    fi
-
-    if [[ -n $DIR ]]; then popd; fi
-    eval $__resultvar="'$myclustermainresult'"
-}
-
-device_main() {
-
-    local __resultvar=$1
-    upgradeManifest=$2
-
-    local mydevicemainresult=$upgradeManifest
-
-    checkPrereqsAndInput
-
-    if [[ -n $DIR ]]; then pushd $DIR; fi   # if they want the files somewhere else, make that our current dir
-
-    cleanUpPreviousFiles
-
-    local upgradeConfigFiles=()    
-    createAgentInstallConfig upgradeConfigFiles
-
-    configFileLength=${#upgradeConfigFiles[@]}
-    if [[ $configFileLength -gt 0 ]]; then 
-	    manifestAddTypeStanza mydevicemainresult "${mydevicemainresult}" "configurationUpgrade" "1.0.0" "${upgradeConfigFiles[@]}"
-    fi
-
-    # local upgradeCertFiles=()    
-    # getClusterCert upgradeCertFiles
-    # certFileLength=${#upgradeCertFiles[@]}
-    # if [[ $certFileLength -gt 0 ]]; then 
-	#     manifestAddTypeStanza mydevicemainresult "${mydevicemainresult}" "certificateUpgrade" "1.0.0" "${upgradeCertFiles[@]}"
-    # fi
-
-    local upgradeSoftwareFiles=()    # define this here since we need to capture device and cluster filenames and agent-install.sh
-    gatherHorizonPackageFiles upgradeSoftwareFiles
-
-    getAgentInstallScript upgradeSoftwareFiles
-
-    softwareFileLength=${#upgradeSoftwareFiles[@]}
-    if [[ $softwareFileLength -gt 0 ]]; then 
-	    manifestAddTypeStanza mydevicemainresult "${mydevicemainresult}" "softwareUpgrade" "${SOFTWARE_PACKAGE_VERSION}" "${upgradeSoftwareFiles[@]}"
-    fi
-    echo
-
-    # Note: if they specified they wanted files in CSS, we did that as the files were created
-
-    if [[ $CREATE_TAR_FILE == 'true' ]]; then
-        createTarFile
-    fi
-
-    if [[ -n $DIR ]]; then popd; fi
-    eval $__resultvar="'$mydevicemainresult'"
-}
-
 # Publish a manifest for files pushed by this execution
 function publishUpgradeManifest() {
 
@@ -1130,16 +1043,9 @@ main() {
     # send to ALL main to get both cluster and device files when sendin in list
     all_main upgradeManifest "${upgradeManifest}"
 
-    # if [[ $EDGE_NODE_TYPE == 'ALL' ]]; then
-	#     all_main upgradeManifest "${upgradeManifest}"
-    # elif [[ $EDGE_NODE_TYPE == 'x86_64-Cluster' || $EDGE_NODE_TYPE == 'ppc64le-Cluster' ]]; then
-	#     cluster_main upgradeManifest "${upgradeManifest}"
-    # else
-	#     device_main upgradeManifest "${upgradeManifest}"
-    # fi
-
     # Publish manifest if artifacts were pushed to CSS which populated the upgradeManifest variable
     if [[ ! "${upgradeManifest}" == "{}" ]]; then
+        setSoftwarePackageVersion ${pkgVersion}
 	    publishUpgradeManifest "${upgradeManifest}" "${SOFTWARE_PACKAGE_VERSION}"
         # add a 'total' object so that agbot knows how many agent files are there before updating AgentFileVersion object
         getAgentFileTotal "${SOFTWARE_PACKAGE_VERSION}"
