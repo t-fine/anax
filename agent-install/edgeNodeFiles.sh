@@ -705,7 +705,8 @@ function getClusterCert () {
                     echo "Getting the management hub self-signed certificate agent-install.crt..."
                     NAMESPACE=$($K8S_CLI_TOOL get eamhub -A | awk 'NR==2 {print $1}')
                     resourcename=$($K8S_CLI_TOOL get eamhub --no-headers -n $NAMESPACE | awk '{printf $1}')
-                    $K8S_CLI_TOOL get secret $resourcename-ca-certificate-secret -n $NAMESPACE -o jsonpath="{.data['ca\.crt']}" | base64 --decode > agent-install.crt
+                    HUB_CERT_NAME=$($K8S_CLI_TOOL get configmap $resourcename-ca-cert-name -n $NAMESPACE -o jsonpath="{.data['ca_secret_name']}")
+                    $K8S_CLI_TOOL get secret $HUB_CERT_NAME -n $NAMESPACE -o jsonpath="{.data['tls\.crt']}" | base64 --decode > agent-install.crt
                     chk $? 'getting the management hub self-signed certificate'
             else
                     if [[ -f ${AGENT_INSTALL_CERT} ]]; then
